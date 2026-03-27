@@ -1,65 +1,244 @@
-import Image from "next/image";
+'use client';
+
+import { useState } from 'react';
+import dynamic from 'next/dynamic';
+import { motion, AnimatePresence } from 'framer-motion';
+import UploadDropzone from '@/components/UploadDropzone';
+import ProcessingLoader from '@/components/ProcessingLoader';
+import MissingFieldsModal from '@/components/MissingFieldsModal';
+import PreviewPanel from '@/components/PreviewPanel';
+import DownloadButton from '@/components/DownloadButton';
 
 export default function Home() {
+  const [file, setFile] = useState<File | null>(null);
+  const [originalImageBase64, setOriginalImageBase64] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [missingFields, setMissingFields] = useState<string[]>([]);
+  const [detectedFields, setDetectedFields] = useState<any[]>([]);
+  const [autoFilled, setAutoFilled] = useState<Record<string, string>>({});
+  const [finalImage, setFinalImage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleUpload = async (uploadedFile: File) => {
+    setFile(uploadedFile);
+    setError(null);
+    setFinalImage(null);
+    
+    // Create preview
+    const reader = new FileReader();
+    reader.onloadend = () => setOriginalImageBase64(reader.result as string);
+    reader.readAsDataURL(uploadedFile);
+
+    setIsProcessing(true);
+
+    try {
+      const formData = new FormData();
+      formData.append('image', uploadedFile);
+
+      const res = await fetch('/api/process', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to process form');
+
+      setDetectedFields(data.detectedFields || []);
+      setAutoFilled(data.autoFilled || {});
+      setMissingFields(data.missingFields || []);
+      
+      // If no missing fields, just generate
+      if (!data.missingFields || data.missingFields.length === 0) {
+        await handleGenerate(data.detectedFields, data.autoFilled, uploadedFile);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleMissingFieldsSubmit = async (manualData: Record<string, string>) => {
+    setMissingFields([]);
+    setIsProcessing(true);
+    
+    const combinedData = { ...autoFilled, ...manualData };
+    
+    try {
+      if (file) {
+        await handleGenerate(detectedFields, combinedData, file);
+      }
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleGenerate = async (fields: any[], data: Record<string, string>, imageFile: File) => {
+    const formattedFields = fields.map(f => {
+      // Find the normalized key used in match logic
+      const normKey = f.label.toLowerCase().replace(/[^a-z0-9]/g, '');
+      // Value might be directly keyed by label or normalized key
+      let matchedValue = data[f.label] || data[normKey];
+      
+      // Look through data keys if not cleanly matched
+      if (!matchedValue) {
+        const foundKey = Object.keys(data).find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === normKey);
+        if (foundKey) matchedValue = data[foundKey];
+      }
+
+      return {
+        ...f,
+        value: matchedValue || ''
+      };
+    });
+
+    const formData = new FormData();
+    formData.append('image', imageFile);
+    formData.append('fields', JSON.stringify(formattedFields));
+
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!res.ok) {
+      const errorData = await res.json();
+      throw new Error(errorData.error || 'Failed to generate image');
+    }
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    setFinalImage(url);
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+    <div className="min-h-screen bg-[var(--background)] text-[var(--foreground)] selection:bg-brand-accent/30 flex flex-col items-center relative overflow-hidden font-sans">
+      {/* Dynamic Architectural Background */}
+      <div className="absolute top-0 left-0 w-full h-full opacity-20 pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[150px] rounded-full" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-blue-600/5 blur-[120px] rounded-full" />
+      </div>
+
+      <main className="w-full max-w-7xl mx-auto px-6 py-16 md:py-24 relative z-10 flex flex-col gap-16">
+        <header className="flex flex-col items-center text-center gap-8 animate-in fade-in slide-in-from-top-4 duration-1000">
+          <div className="inline-flex items-center gap-3 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 text-[10px] font-bold uppercase tracking-[0.2em] text-neutral-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.8)] animate-pulse"></span>
+            V4.0 Production Engine
+          </div>
+          <div className="space-y-4">
+            <h1 className="text-6xl md:text-8xl font-bold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white via-white to-white/40 leading-[1.1]">
+              AutoFill AI
+            </h1>
+            <p className="text-neutral-400 text-lg md:text-xl max-w-2xl mx-auto leading-relaxed font-medium">
+              A high-precision system to extract, align, and synthesize your digital forms with instantaneous database matching.
+            </p>
+          </div>
+        </header>
+
+        <div className="grid lg:grid-cols-12 gap-10 items-stretch">
+          {/* Left Column: Intelligence Panel */}
+          <div className="lg:col-span-5 flex flex-col gap-8">
+            <div className="bg-[#121214]/80 backdrop-blur-3xl border border-white/[0.08] rounded-[2.5rem] p-10 shadow-2xl relative overflow-hidden group/card transition-all duration-500 hover:border-white/20">
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-indigo-500/40 to-transparent opacity-0 group-hover/card:opacity-100 transition-opacity duration-700" />
+              
+              <div className="flex items-center gap-4 mb-10">
+                <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center font-bold border border-indigo-500/20 shadow-[inset_0_0_15px_rgba(99,102,241,0.1)]">
+                  01
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold tracking-tight text-white">Input Source</h2>
+                  <p className="text-xs text-neutral-500 font-medium uppercase tracking-widest mt-0.5">Awaiting Document</p>
+                </div>
+              </div>
+
+              <UploadDropzone onUpload={handleUpload} />
+              
+              <AnimatePresence>
+                {error && (
+                  <motion.div 
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="mt-8 overflow-hidden"
+                  >
+                    <div className="p-4 bg-red-500/5 border border-red-500/20 rounded-2xl flex gap-3 items-center">
+                      <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                      <p className="text-red-400 text-sm font-semibold tracking-tight">{error}</p>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            <AnimatePresence mode="wait">
+              {isProcessing && (
+                <motion.div 
+                  key="loader"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="bg-[#121214]/80 backdrop-blur-3xl border border-white/[0.08] rounded-[2.5rem] p-4 shadow-2xl ring-1 ring-white/5"
+                >
+                  <ProcessingLoader />
+                </motion.div>
+              )}
+              
+              {finalImage && !isProcessing && (
+                <motion.div 
+                  key="success"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="bg-[#121214]/80 backdrop-blur-3xl border border-white/[0.08] rounded-[2.5rem] p-10 shadow-2xl relative overflow-hidden group/success"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-br from-green-500/[0.03] to-transparent pointer-events-none" />
+                  <div className="relative z-10 flex flex-col items-center text-center gap-6">
+                    <div className="w-20 h-20 rounded-[1.5rem] bg-green-500/10 flex items-center justify-center text-green-400 border border-green-500/20 shadow-[0_0_30px_rgba(34,197,94,0.1)]">
+                      <svg className="w-10 h-10" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="space-y-2">
+                      <h2 className="text-3xl font-bold text-white tracking-tighter">Synthesized</h2>
+                      <p className="text-neutral-400 font-medium">The extraction engine has perfectly aligned the data layers.</p>
+                    </div>
+                    <div className="w-full pt-4">
+                      <DownloadButton imageSrc={finalImage} />
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Right Column: Visualization Panel */}
+          <div className="lg:col-span-7 h-[650px] lg:h-auto min-h-[600px]">
+            {originalImageBase64 ? (
+              <div className="h-full animate-in fade-in zoom-in-95 duration-1000">
+                <PreviewPanel originalImage={originalImageBase64} processedImage={finalImage} />
+              </div>
+            ) : (
+              <div className="h-full rounded-[2.5rem] border border-dashed border-white/10 bg-[#121214]/30 backdrop-blur-sm flex flex-col items-center justify-center text-neutral-500 transition-all duration-500 hover:bg-[#121214]/50 hover:border-white/20 hover:shadow-inner group/empty">
+                <div className="w-16 h-16 rounded-3xl bg-white/[0.02] border border-white/5 flex items-center justify-center mb-6 group-hover/empty:scale-110 transition-transform duration-500">
+                  <svg className="w-8 h-8 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                </div>
+                <p className="font-bold tracking-[0.2em] text-[10px] uppercase opacity-40">Visualization Awaiting Input</p>
+              </div>
+            )}
+          </div>
         </div>
       </main>
+
+      {missingFields.length > 0 && (
+        <MissingFieldsModal 
+          missingFields={missingFields} 
+          onSubmit={handleMissingFieldsSubmit} 
+          onCancel={() => setMissingFields([])} 
+        />
+      )}
     </div>
   );
 }
