@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
 import UploadDropzone from '@/components/UploadDropzone';
 import ProcessingLoader from '@/components/ProcessingLoader';

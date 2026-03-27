@@ -1,10 +1,10 @@
-const sharp = require('sharp');
-const fs = require('fs');
-const path = require('path');
+import sharp from 'sharp';
+import { existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
 
-const publicDir = path.join(__dirname, 'public');
-if (!fs.existsSync(publicDir)){
-    fs.mkdirSync(publicDir);
+const publicDir = join(__dirname, 'public');
+if (!existsSync(publicDir)){
+    mkdirSync(publicDir);
 }
 
 const svgText = `
@@ -31,6 +31,6 @@ const svgText = `
 
 sharp(Buffer.from(svgText))
   .png()
-  .toFile(path.join(publicDir, 'test-form.png'))
+  .toFile(join(publicDir, 'test-form.png'))
   .then(() => console.log('Test form created at public/test-form.png'))
   .catch(err => console.error(err));
