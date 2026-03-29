@@ -22,6 +22,7 @@ Priority ordering: P0 (critical) -> P3 (nice to have)
 
 ## P1 - Add NLP Field Classification Layer (New Requirement)
 
+- [ ] Add OpenRouter API-backed LLM layer for semantic field classification/normalization.
 - [ ] Create `src/lib/fieldClassifier.ts`.
 - [ ] Define field categories:
   - [ ] `fillable_field`
