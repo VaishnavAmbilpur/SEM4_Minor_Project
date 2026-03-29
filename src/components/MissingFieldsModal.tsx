@@ -2,8 +2,13 @@ import { useState } from 'react';
 import { X, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+interface MissingFieldItem {
+  label: string;
+  canonicalKey: string;
+}
+
 interface Props {
-  missingFields: string[];
+  missingFields: MissingFieldItem[];
   onSubmit: (data: Record<string, string>) => void;
   onCancel: () => void;
 }
@@ -11,8 +16,8 @@ interface Props {
 export default function MissingFieldsModal({ missingFields, onSubmit, onCancel }: Props) {
   const [formData, setFormData] = useState<Record<string, string>>({});
 
-  const handleChange = (field: string, value: string) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
+  const handleChange = (key: string, value: string) => {
+    setFormData((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -55,18 +60,18 @@ export default function MissingFieldsModal({ missingFields, onSubmit, onCancel }
                   initial={{ opacity: 0, x: -10 }} 
                   animate={{ opacity: 1, x: 0 }} 
                   transition={{ delay: index * 0.05 }}
-                  key={field} 
+                  key={`${field.canonicalKey}-${index}`} 
                   className="space-y-1.5"
                 >
-                  <label className="text-sm font-medium text-neutral-300 ml-1">{field}</label>
+                  <label className="text-sm font-medium text-neutral-300 ml-1">{field.label}</label>
                   <div className="relative group">
                     <input
                       type="text"
                       required
-                      value={formData[field] || ''}
-                      onChange={(e) => handleChange(field, e.target.value)}
+                      value={formData[field.canonicalKey] || ''}
+                      onChange={(e) => handleChange(field.canonicalKey, e.target.value)}
                       className="w-full px-4 py-3 bg-black/40 border border-white/10 rounded-xl text-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all placeholder:text-neutral-600"
-                      placeholder={`Enter ${field}...`}
+                      placeholder={`Enter ${field.label}...`}
                     />
                   </div>
                 </motion.div>

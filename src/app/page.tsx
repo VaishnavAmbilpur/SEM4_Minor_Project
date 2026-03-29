@@ -8,20 +8,67 @@ import MissingFieldsModal from '@/components/MissingFieldsModal';
 import PreviewPanel from '@/components/PreviewPanel';
 import DownloadButton from '@/components/DownloadButton';
 
+interface ExtractedField {
+  label: string;
+  canonicalKey: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+}
+
+interface AutoFilledField extends ExtractedField {
+  value: string;
+  source: 'profile' | 'user';
+}
+
+interface MissingField extends ExtractedField {
+  reason: 'missing_value';
+}
+
+interface ProcessResponse {
+  status: 'needs_input' | 'completed' | 'failed';
+  requestId: string;
+  error: string | null;
+  extractedFields: ExtractedField[];
+  autoFilledFields: AutoFilledField[];
+  missingFields: MissingField[];
+  filledImage: string | null;
+}
+
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return 'Failed to process form';
+}
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [originalImageBase64, setOriginalImageBase64] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [missingFields, setMissingFields] = useState<string[]>([]);
-  const [detectedFields, setDetectedFields] = useState<any[]>([]);
-  const [autoFilled, setAutoFilled] = useState<Record<string, string>>({});
+  const [missingFields, setMissingFields] = useState<MissingField[]>([]);
+  const [detectedFields, setDetectedFields] = useState<ExtractedField[]>([]);
   const [finalImage, setFinalImage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const applyProcessResponse = (data: ProcessResponse) => {
+    setDetectedFields(data.extractedFields || []);
+    setMissingFields(data.missingFields || []);
+
+    if (data.status === 'completed' && data.filledImage) {
+      setFinalImage(data.filledImage);
+    }
+  };
 
   const handleUpload = async (uploadedFile: File) => {
     setFile(uploadedFile);
     setError(null);
     setFinalImage(null);
+    setMissingFields([]);
+    setDetectedFields([]);
     
     // Create preview
     const reader = new FileReader();
@@ -39,77 +86,47 @@ export default function Home() {
         body: formData,
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Failed to process form');
-
-      setDetectedFields(data.detectedFields || []);
-      setAutoFilled(data.autoFilled || {});
-      setMissingFields(data.missingFields || []);
-      
-      // If no missing fields, just generate
-      if (!data.missingFields || data.missingFields.length === 0) {
-        await handleGenerate(data.detectedFields, data.autoFilled, uploadedFile);
+      const data = (await res.json()) as ProcessResponse;
+      if (!res.ok || data.status === 'failed') {
+        throw new Error(data.error || 'Failed to process form');
       }
-    } catch (err: any) {
-      setError(err.message);
+
+      applyProcessResponse(data);
+    } catch (error) {
+      setError(toErrorMessage(error));
     } finally {
       setIsProcessing(false);
     }
   };
 
   const handleMissingFieldsSubmit = async (manualData: Record<string, string>) => {
-    setMissingFields([]);
+    if (!file) return;
+
     setIsProcessing(true);
-    
-    const combinedData = { ...autoFilled, ...manualData };
-    
+    setError(null);
+
     try {
-      if (file) {
-        await handleGenerate(detectedFields, combinedData, file);
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('extractedFields', JSON.stringify(detectedFields));
+      formData.append('missingValues', JSON.stringify(manualData));
+
+      const res = await fetch('/api/process', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = (await res.json()) as ProcessResponse;
+      if (!res.ok || data.status === 'failed') {
+        throw new Error(data.error || 'Failed to complete form');
       }
-    } catch (err: any) {
-      setError(err.message);
+
+      applyProcessResponse(data);
+    } catch (error) {
+      setError(toErrorMessage(error));
     } finally {
       setIsProcessing(false);
     }
-  };
-
-  const handleGenerate = async (fields: any[], data: Record<string, string>, imageFile: File) => {
-    const formattedFields = fields.map(f => {
-      // Find the normalized key used in match logic
-      const normKey = f.label.toLowerCase().replace(/[^a-z0-9]/g, '');
-      // Value might be directly keyed by label or normalized key
-      let matchedValue = data[f.label] || data[normKey];
-      
-      // Look through data keys if not cleanly matched
-      if (!matchedValue) {
-        const foundKey = Object.keys(data).find(k => k.toLowerCase().replace(/[^a-z0-9]/g, '') === normKey);
-        if (foundKey) matchedValue = data[foundKey];
-      }
-
-      return {
-        ...f,
-        value: matchedValue || ''
-      };
-    });
-
-    const formData = new FormData();
-    formData.append('image', imageFile);
-    formData.append('fields', JSON.stringify(formattedFields));
-
-    const res = await fetch('/api/generate', {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!res.ok) {
-      const errorData = await res.json();
-      throw new Error(errorData.error || 'Failed to generate image');
-    }
-
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    setFinalImage(url);
   };
 
   return (
@@ -233,7 +250,10 @@ export default function Home() {
 
       {missingFields.length > 0 && (
         <MissingFieldsModal 
-          missingFields={missingFields} 
+          missingFields={missingFields.map((field) => ({
+            label: field.label,
+            canonicalKey: field.canonicalKey,
+          }))}
           onSubmit={handleMissingFieldsSubmit} 
           onCancel={() => setMissingFields([])} 
         />
