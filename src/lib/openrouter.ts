@@ -1,16 +1,17 @@
-const DEFAULT_OPENROUTER_MODEL = 'google/gemma-3-4b-it:free';
+import { devLogger } from '@/lib/devLogger';
+import type { DetectedFormField, FillPoint, FormFieldMapping } from '@/lib/formTypes';
+import { isOptionalFieldLabel, resolveCanonicalProfileKey } from '@/lib/profileKeys';
+
+const DEFAULT_OPENROUTER_MODELS = [
+  'google/gemma-4-31b-it:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'google/gemma-3-27b-it:free',
+  'google/gemma-3-12b-it:free',
+  'google/gemma-3-4b-it:free',
+];
+
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 2;
-
-export interface OpenRouterExtractedField {
-  label: string;
-  canonicalKey: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  confidence: number;
-}
 
 interface OpenRouterChatResponse {
   choices?: Array<{
@@ -28,6 +29,11 @@ function getRequiredEnv(name: string): string {
   return value;
 }
 
+function getOptionalEnv(name: string): string | null {
+  const value = process.env[name]?.trim();
+  return value || null;
+}
+
 function getNumberEnv(name: string, fallback: number): number {
   const value = process.env[name];
   if (!value) return fallback;
@@ -35,15 +41,29 @@ function getNumberEnv(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function getModels(): string[] {
+  const configuredModels = process.env.OPENROUTER_MODELS?.trim();
+  if (configuredModels) {
+    const models = configuredModels
+      .split(',')
+      .map((model) => model.trim())
+      .filter(Boolean);
+
+    if (models.length > 0) {
+      return models;
+    }
+  }
+
+  const configuredModel = process.env.OPENROUTER_MODEL?.trim();
+  if (configuredModel) {
+    return [configuredModel];
+  }
+
+  return DEFAULT_OPENROUTER_MODELS;
 }
 
-function normalizeCanonicalKey(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function extractAssistantText(payload: OpenRouterChatResponse): string {
@@ -100,7 +120,7 @@ function asNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function normalizeExtractedFields(data: unknown): OpenRouterExtractedField[] {
+function normalizeExtractedFields(data: unknown): DetectedFormField[] {
   if (!data || typeof data !== 'object') {
     return [];
   }
@@ -109,56 +129,88 @@ function normalizeExtractedFields(data: unknown): OpenRouterExtractedField[] {
   const fields = Array.isArray(root.fields) ? root.fields : [];
 
   return fields
-    .map((item): OpenRouterExtractedField | null => {
+    .map((item): DetectedFormField | null => {
       if (!item || typeof item !== 'object') return null;
 
       const record = item as Record<string, unknown>;
-      const label = typeof record.label === 'string' ? record.label.trim() : '';
-
+      const detectedLabel = typeof record.label === 'string' ? record.label.trim() : '';
+      const rawOriginalKey =
+        typeof record.original_form_key === 'string'
+          ? record.original_form_key
+          : typeof record.originalFormKey === 'string'
+            ? record.originalFormKey
+            : detectedLabel;
       const rawCanonical =
-        typeof record.canonicalKey === 'string'
-          ? record.canonicalKey
-          : typeof record.canonical_key === 'string'
-            ? record.canonical_key
-            : label;
-
-      const canonicalKey = normalizeCanonicalKey(rawCanonical);
+        typeof record.canonical_key === 'string'
+          ? record.canonical_key
+          : typeof record.canonicalKey === 'string'
+            ? record.canonicalKey
+            : rawOriginalKey;
       const bbox = (record.bbox ?? {}) as Record<string, unknown>;
-
       const x = asNumber(record.x ?? bbox.x);
       const y = asNumber(record.y ?? bbox.y);
       const width = asNumber(record.width ?? bbox.width);
       const height = asNumber(record.height ?? bbox.height);
+      const confidence = Math.max(0, Math.min(1, asNumber(record.confidence, 0.75)));
+      const rawOptional =
+        typeof record.is_optional === 'boolean'
+          ? record.is_optional
+          : typeof record.isOptional === 'boolean'
+            ? record.isOptional
+            : isOptionalFieldLabel(detectedLabel);
 
-      if (!label || !canonicalKey || width <= 0 || height <= 0) {
+      if (!detectedLabel || width <= 0 || height <= 0) {
         return null;
       }
 
-      const confidence = Math.max(0, Math.min(1, asNumber(record.confidence, 0.75)));
-
       return {
-        label,
-        canonicalKey,
-        x,
-        y,
-        width,
-        height,
+        detectedLabel,
+        originalFormKey: rawOriginalKey || detectedLabel,
+        canonicalKey: resolveCanonicalProfileKey(rawCanonical, rawOriginalKey, detectedLabel),
+        isOptional: Boolean(rawOptional),
         confidence,
+        labelBox: {
+          x,
+          y,
+          width,
+          height,
+        },
       };
     })
-    .filter((item): item is OpenRouterExtractedField => item !== null);
+    .filter((item): item is DetectedFormField => item !== null);
+}
+
+function normalizeFillPoint(data: unknown): FillPoint | null {
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  const root = data as Record<string, unknown>;
+  const point = (root.fill_point ?? root.fillPoint ?? root) as Record<string, unknown>;
+  const x = asNumber(point.x);
+  const y = asNumber(point.y);
+
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    return null;
+  }
+
+  return { x, y };
 }
 
 function buildExtractionPrompt(): string {
   return [
     'You are extracting fillable form fields from an image.',
     'Return strict JSON only. No markdown.',
+    'The coordinates must describe the visible field text or label region that identifies the field.',
+    'Do not return the blank whitespace where the answer will be written.',
     'Schema:',
     '{',
     '  "fields": [',
     '    {',
-    '      "label": "visible field label",',
+    '      "label": "visible field label text",',
     '      "canonical_key": "snake_case_key",',
+    '      "original_form_key": "raw field name as seen on the form",',
+    '      "is_optional": false,',
     '      "bbox": { "x": 0, "y": 0, "width": 0, "height": 0 },',
     '      "confidence": 0.0',
     '    }',
@@ -166,46 +218,81 @@ function buildExtractionPrompt(): string {
     '}',
     'Rules:',
     '- Include only fields intended to be filled by a user.',
+    '- Detect optional fields too, for example middle name.',
     '- Coordinates are pixel values relative to the input image.',
     '- Confidence must be between 0 and 1.',
-    '- canonical_key should be stable and semantic, e.g. first_name, date_of_birth, phone_number.',
+    '- canonical_key should be semantic and stable, for example first_name, dob, phone.',
   ].join('\n');
 }
 
-export async function extractFieldsWithOpenRouter(
+function buildFillPointPrompt(field: FormFieldMapping): string {
+  return [
+    'You are locating where a value should be written on a form.',
+    'Return strict JSON only. No markdown.',
+    'The input field label region has already been detected.',
+    'Find the blank whitespace corresponding to this field and return a safe top-left anchor point for writing the value.',
+    'Field details:',
+    `label: ${field.detectedLabel}`,
+    `canonical_key: ${field.canonicalKey}`,
+    `value_to_write: ${field.value ?? ''}`,
+    `label_box: ${JSON.stringify(field.labelBox)}`,
+    'Schema:',
+    '{ "fill_point": { "x": 0, "y": 0 } }',
+    'Rules:',
+    '- The point must be inside the image.',
+    '- The point must be in the blank answer area for this field.',
+    '- Do not place the point on top of the label text.',
+    '- Prefer the whitespace immediately associated with the provided label box.',
+  ].join('\n');
+}
+
+async function sendOpenRouterRequest(
+  prompt: string,
   imageBuffer: Buffer,
   mimeType: string,
-): Promise<OpenRouterExtractedField[]> {
-  const apiKey = getRequiredEnv('OPENROUTER_API_KEY');
-  const model = process.env.OPENROUTER_MODEL?.trim() || DEFAULT_OPENROUTER_MODEL;
+  options?: { allowMissingApiKey?: boolean },
+): Promise<unknown> {
+  const apiKey = getOptionalEnv('OPENROUTER_API_KEY');
+  if (!apiKey) {
+    if (options?.allowMissingApiKey) {
+      throw new Error('OPENROUTER_API_KEY is not configured');
+    }
+
+    throw new Error('Missing required environment variable: OPENROUTER_API_KEY');
+  }
+
+  const models = getModels();
   const timeoutMs = getNumberEnv('OPENROUTER_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
   const retries = getNumberEnv('OPENROUTER_RETRIES', DEFAULT_RETRIES);
-
   const imageDataUrl = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
-  const payload = {
-    model,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text: buildExtractionPrompt(),
-          },
-          {
-            type: 'image_url',
-            image_url: {
-              url: imageDataUrl,
-            },
-          },
-        ],
-      },
-    ],
-  };
 
   let lastError: Error | null = null;
+  const totalAttempts = models.length * (retries + 1);
 
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
+  for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
+    const model = models[attempt % models.length];
+    const cycle = Math.floor(attempt / models.length) + 1;
+    const payload = {
+      model,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'text',
+              text: prompt,
+            },
+            {
+              type: 'image_url',
+              image_url: {
+                url: imageDataUrl,
+              },
+            },
+          ],
+        },
+      ],
+    };
+
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -230,7 +317,16 @@ export async function extractFieldsWithOpenRouter(
         const bodyText = await response.text();
         const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
 
-        if (retryable && attempt < retries) {
+        devLogger.warn('openrouter', 'Received non-OK response', {
+          attempt: attempt + 1,
+          cycle,
+          model,
+          status: response.status,
+          retryable,
+          bodyPreview: bodyText.slice(0, 500),
+        });
+
+        if (retryable && attempt < totalAttempts - 1) {
           await sleep((attempt + 1) * 500);
           continue;
         }
@@ -239,18 +335,16 @@ export async function extractFieldsWithOpenRouter(
       }
 
       const result = (await response.json()) as OpenRouterChatResponse;
-      const assistantText = extractAssistantText(result);
-      const parsed = parseJsonLenient(assistantText);
-      const fields = normalizeExtractedFields(parsed);
-
-      if (fields.length === 0) {
-        throw new Error('OpenRouter returned no valid fields');
-      }
-
-      return fields;
+      return parseJsonLenient(extractAssistantText(result));
     } catch (error) {
       lastError = error instanceof Error ? error : new Error('Unknown OpenRouter error');
-      if (attempt < retries) {
+      devLogger.error('openrouter', 'OpenRouter request failed', {
+        attempt: attempt + 1,
+        cycle,
+        model,
+        message: lastError.message,
+      });
+      if (attempt < totalAttempts - 1) {
         await sleep((attempt + 1) * 500);
         continue;
       }
@@ -259,5 +353,68 @@ export async function extractFieldsWithOpenRouter(
     }
   }
 
-  throw lastError ?? new Error('OpenRouter extraction failed');
+  throw lastError ?? new Error('OpenRouter request failed');
+}
+
+function heuristicFillPoint(field: FormFieldMapping): FillPoint {
+  return {
+    x: Math.max(0, Math.round(field.labelBox.x + field.labelBox.width + 14)),
+    y: Math.max(0, Math.round(field.labelBox.y + field.labelBox.height * 0.2)),
+  };
+}
+
+export async function extractFieldsWithOpenRouter(
+  imageBuffer: Buffer,
+  mimeType: string,
+): Promise<DetectedFormField[]> {
+  devLogger.log('openrouter', 'Starting extraction request', {
+    mimeType,
+    imageBytes: imageBuffer.length,
+  });
+
+  const parsed = await sendOpenRouterRequest(buildExtractionPrompt(), imageBuffer, mimeType);
+  const fields = normalizeExtractedFields(parsed);
+
+  devLogger.log('openrouter', 'Parsed extraction response', {
+    fieldCount: fields.length,
+    sampleFields: fields.slice(0, 5),
+  });
+
+  if (fields.length === 0) {
+    throw new Error('OpenRouter returned no valid fields');
+  }
+
+  return fields;
+}
+
+export async function locateFillPointWithOpenRouter(
+  imageBuffer: Buffer,
+  mimeType: string,
+  field: FormFieldMapping,
+): Promise<{ fillPoint: FillPoint; source: 'ai' | 'heuristic' }> {
+  try {
+    const parsed = await sendOpenRouterRequest(buildFillPointPrompt(field), imageBuffer, mimeType, {
+      allowMissingApiKey: true,
+    });
+    const fillPoint = normalizeFillPoint(parsed);
+    if (!fillPoint) {
+      throw new Error('OpenRouter returned no fill point');
+    }
+
+    return {
+      fillPoint,
+      source: 'ai',
+    };
+  } catch (error) {
+    devLogger.warn('openrouter', 'Falling back to heuristic fill point', {
+      fieldId: field.fieldId,
+      label: field.detectedLabel,
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+
+    return {
+      fillPoint: heuristicFillPoint(field),
+      source: 'heuristic',
+    };
+  }
 }

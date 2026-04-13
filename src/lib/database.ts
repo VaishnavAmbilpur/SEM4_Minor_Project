@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { devLogger } from '@/lib/devLogger';
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:6000/automated_form_system';
 
@@ -6,10 +7,19 @@ if (!MONGODB_URI) {
   throw new Error('Please define the MONGODB_URI environment variable inside .env.local');
 }
 
-let cached = (global as any).mongoose;
+type MongooseCache = {
+  conn: typeof mongoose | null;
+  promise: Promise<typeof mongoose> | null;
+};
+
+declare global {
+  var mongooseCache: MongooseCache | undefined;
+}
+
+let cached = global.mongooseCache;
 
 if (!cached) {
-  cached = (global as any).mongoose = { conn: null, promise: null };
+  cached = global.mongooseCache = { conn: null, promise: null };
 }
 
 async function dbConnect() {
@@ -23,7 +33,7 @@ async function dbConnect() {
     };
 
     cached.promise = mongoose.connect(MONGODB_URI, opts).then((mongoose) => {
-      console.log('MongoDB connected successfully');
+      devLogger.log('database', 'MongoDB connected successfully');
       return mongoose;
     });
   }

@@ -1,92 +1,150 @@
-# Project TODOs: OpenRouter-Driven Form Autofill Pipeline
-
+# Project TODOs: Required Alignment for the Full Form Autofill Flow
 
 Priority ordering: P0 (critical) -> P3 (nice to have)
 
-## P0 - Core API Pipeline
+## Current State Summary
 
-- [ ] Update `src/app/api/process/route.ts` to orchestrate full flow:
-  - [ ] receive uploaded image
-  - [ ] call OpenRouter image-to-text model
-  - [ ] parse required fields + fill coordinates
-  - [ ] split into auto-fillable vs missing values
-  - [ ] return either `needsUserInput` or `filledForm`
-- [ ] Add strict input validation (mime type, size, dimensions) for upload safety.
-- [ ] Add stage-level timings (`openrouter_ms`, `mapping_ms`, `fill_ms`, `total_ms`).
+- Authentication exists and MongoDB user creation already happens on registration.
+- `/api/process` already validates uploads, extracts fields with OpenRouter, matches against profile data, and returns a completed image or a missing-fields modal.
+- The current UI is still a single page, not the required two-page flow.
+- The current extraction response does not create a durable field object with IDs, optional flags, or second-pass fill coordinates.
+- User-supplied missing values are not written back to MongoDB during form completion.
+- The rendering step writes into the coordinates from the first extraction pass instead of doing a second AI pass to find the blank write area.
 
-## P0 - OpenRouter LLM Extraction Layer
+## P0 - App Flow and Data Model Alignment
 
-- [ ] Create `src/lib/openrouter.ts` for OpenRouter API calls.
-- [ ] Add env config and guards:
-  - [ ] `OPENROUTER_API_KEY`
-  - [ ] `OPENROUTER_MODEL`
-  - [ ] optional timeout and retries
-- [ ] Define a strict extraction schema from model output:
-  - [ ] field label
+- [ ] Split the app into two pages:
+  - [ ] `src/app/page.tsx` should stay the home upload/download flow.
+  - [ ] create `src/app/account/page.tsx` for account data display and profile editing.
+- [ ] Replace the current fixed profile UI with a dynamic key-value view of all data stored in MongoDB.
+- [ ] Introduce a per-upload `formFields` object/array as the single source of truth for the active form.
+- [ ] Give every detected field a unique `fieldId`.
+- [ ] Expand the field schema to include:
+  - [ ] `fieldId`
+  - [ ] detected field label
   - [ ] canonical key
-  - [ ] bounding box (`x`, `y`, `width`, `height`)
-  - [ ] confidence
-- [ ] Add robust JSON parsing and fallback handling for malformed model responses.
+  - [ ] original form key
+  - [ ] required vs optional flag
+  - [ ] first-pass label/text coordinates
+  - [ ] second-pass blank-space coordinates
+  - [ ] resolved value
+  - [ ] value source
+  - [ ] match status
 
-## P1 - Field Mapping and Missing Input Logic
+## P0 - First AI Pass: Field Recognition
 
-- [ ] Map extracted canonical keys to user profile values from `src/models/user.ts`.
-- [ ] Create deterministic merge logic:
-  - [ ] `autoFilledFields` (value available)
-  - [ ] `missingFields` (value required from user)
-- [ ] Ensure response includes coordinate metadata for both groups.
-- [ ] Add clear prompt payload format for frontend collection of missing values.
+- [ ] Update `src/lib/openrouter.ts` prompt and schema so the first AI pass returns the coordinates of the field text/label region, not the whitespace where text will be filled.
+- [ ] Ensure the extraction response explicitly identifies optional fields such as middle name.
+- [ ] Tighten schema validation so malformed or partial field objects are rejected early.
+- [ ] Update `src/app/api/process/route.ts` to store first-pass results in the new `formFields` structure instead of only `extractedFields`.
 
-## P1 - Form Filling with Sharp
+## P0 - Deterministic Field Matching
 
-- [ ] Update `src/lib/imageGenerator.ts` to fill text using extracted coordinates from OpenRouter output.
-- [ ] Add text rendering rules (font size, wrapping, overflow clipping by field box).
-- [ ] Fill in two passes when needed:
-  - [ ] first pass: DB/user-known values
-  - [ ] second pass: user-supplied missing values
-- [ ] Return downloadable final form image buffer from backend.
+- [ ] Replace simple normalization-only matching with canonical alias resolution.
+- [ ] Add a shared mapping dictionary for equivalent terms such as:
+  - [ ] `dob`
+  - [ ] `date_of_birth`
+  - [ ] `birth_date`
+  - [ ] `phone`
+  - [ ] `phone_number`
+- [ ] Add ambiguity handling when multiple stored keys could map to the same detected field.
+- [ ] Mark uncertain matches as `needs_review` instead of silently autofilling the wrong value.
 
-## P2 - Frontend Flow Changes
+## P0 - Missing Field Collection and Persistence
 
-- [ ] Update upload flow in `src/components/UploadDropzone.tsx` for new `/api/process` contract.
-- [ ] Update `src/components/MissingFieldsModal.tsx` to render missing fields from API payload.
-- [ ] Add submit action to send missing values and coordinates for final fill.
-- [ ] Update `src/components/PreviewPanel.tsx` / `src/components/DownloadButton.tsx` for final image handling.
+- [ ] Return only unresolved fields to the frontend after matching.
+- [ ] Distinguish required and optional fields in the missing-fields response.
+- [ ] Update `src/components/MissingFieldsModal.tsx` so the UI clearly labels optional vs required values.
+- [ ] When the user submits missing values:
+  - [ ] update the in-memory `formFields` object
+  - [ ] persist the answer to MongoDB
+  - [ ] preserve canonical storage for future reuse
+  - [ ] keep the original form field label when useful for traceability
 
-## P2 - API Contract and Docs
+## P0 - Second AI Pass: Blank-Space Coordinate Detection
 
-- [ ] Define and document `/api/process` response states:
-  - [ ] `status: needs_input`
-  - [ ] `status: completed`
-  - [ ] `status: failed`
-- [ ] Include these payload sections:
-  - [ ] `extractedFields`
-  - [ ] `autoFilledFields`
+- [ ] Add a second AI step after all field values are known.
+- [ ] Process fields one by one to reduce hallucination.
+- [ ] For each field, send:
+  - [ ] field label
+  - [ ] resolved value
+  - [ ] first-pass label/text coordinates
+  - [ ] relevant image context
+- [ ] Store the returned blank-space `x` and `y` coordinates back into the `formFields` object.
+- [ ] Add guardrails so impossible coordinates or out-of-bounds points are rejected.
+
+## P1 - Final Rendering and Download Flow
+
+- [ ] Update `src/lib/imageGenerator.ts` to render using second-pass fill coordinates, not first-pass label coordinates.
+- [ ] Decide whether each field needs:
+  - [ ] a point anchor
+  - [ ] a box anchor
+  - [ ] multiline wrapping
+- [ ] Keep the completed download experience on the home page after rendering succeeds.
+- [ ] Return the filled image together with the finalized `formFields` object for debugging and auditability.
+
+## P1 - API Contract Updates
+
+- [ ] Redesign `/api/process` around the new lifecycle:
+  - [ ] upload and validate image
+  - [ ] first AI pass extracts fields and label coordinates
+  - [ ] backend matches values from MongoDB
+  - [ ] frontend collects only unresolved inputs
+  - [ ] backend persists submitted values
+  - [ ] second AI pass finds blank write coordinates per field
+  - [ ] Sharp renders final image
+- [ ] Update response payloads to prefer:
+  - [ ] `formFields`
+  - [ ] `resolvedFields`
   - [ ] `missingFields`
-  - [ ] `filledImage` (when completed)
+  - [ ] `filledImage`
   - [ ] `timings`
   - [ ] `requestId`
-- [ ] Align `WORKFLOW.md` with this OpenRouter-first architecture.
+- [ ] Preserve response states:
+  - [ ] `needs_input`
+  - [ ] `completed`
+  - [ ] `failed`
+
+## P2 - Frontend UX Follow-Through
+
+- [ ] Refactor the authenticated experience so account management is not mixed into the upload workflow.
+- [ ] Add an account page section that lists every stored DB key-value pair, not just editable hardcoded fields.
+- [ ] Show the user which values were:
+  - [ ] matched from the database
+  - [ ] entered manually
+  - [ ] unresolved or ambiguous
+- [ ] Consider showing a lightweight per-field status view for the active form object.
 
 ## P2 - Testing
 
-- [ ] Add unit tests for OpenRouter response parser and schema validator.
-- [ ] Add unit tests for field mapping and missing-input splitter.
-- [ ] Add integration test for `/api/process`:
-  - [ ] complete path (no missing fields)
-  - [ ] missing-input path
-  - [ ] OpenRouter timeout/error path
-- [ ] Add regression tests for coordinate correctness used by Sharp filling.
+- [ ] Add unit tests for first-pass extraction schema validation.
+- [ ] Add unit tests for alias matching and ambiguity handling.
+- [ ] Add unit tests for persistence of user-entered missing values back into MongoDB.
+- [ ] Add unit tests for second-pass fill-coordinate validation.
+- [ ] Add integration tests for `/api/process`:
+  - [ ] no missing fields path
+  - [ ] missing required fields path
+  - [ ] optional field present path
+  - [ ] ambiguous alias path
+  - [ ] second-pass coordinate failure path
 
-## P3 - Reliability and Ops
+## P3 - Reliability and Observability
 
-- [ ] Add structured logging for each stage with `requestId`.
-- [ ] Add retry strategy with backoff for transient OpenRouter failures.
-- [ ] Add benchmark script for small/medium/large forms.
-- [ ] Set SLA target (example: P95 < 15s end-to-end).
+- [ ] Add stage-level timings for:
+  - [ ] first AI extraction
+  - [ ] matching
+  - [ ] missing-value persistence
+  - [ ] second AI fill-point detection
+  - [ ] Sharp rendering
+  - [ ] total request time
+- [ ] Add structured logs with `requestId` and `fieldId`.
+- [ ] Add retries/backoff only where AI failures are safe to retry.
+- [ ] Add benchmark coverage for small, medium, and large forms.
 
 ## Suggested Milestones
 
-- Milestone 1: OpenRouter extraction + parsing integrated.
-- Milestone 2: Missing-input loop and Sharp fill complete.
-- Milestone 3: Frontend UX, tests, and operational hardening complete.
+- Milestone 1: Two-page app structure and dynamic account data view.
+- Milestone 2: Durable `formFields` object with IDs, optional flags, and deterministic matching.
+- Milestone 3: Missing-value persistence to MongoDB and improved unresolved-field UX.
+- Milestone 4: Second AI pass for blank-space coordinates and Sharp rendering update.
+- Milestone 5: Tests, logging, and hardening.

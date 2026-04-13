@@ -1,18 +1,9 @@
 import { extractFieldsWithOpenRouter } from './openrouter';
-
-export interface DetectedField {
-  label: string;
-  canonicalKey: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  confidence: number;
-}
+import type { DetectedFormField } from './formTypes';
 
 export async function extractFieldsFromImage(
   imageBuffer: Buffer,
   mimeType: string,
-): Promise<DetectedField[]> {
+): Promise<DetectedFormField[]> {
   return extractFieldsWithOpenRouter(imageBuffer, mimeType);
 }

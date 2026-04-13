@@ -2,11 +2,14 @@ import { NextResponse } from 'next/server';
 import sharp from 'sharp';
 import { randomUUID } from 'crypto';
 import { extractFieldsFromImage } from '@/lib/ocr';
-import { matchFields } from '@/lib/matcher';
-import type { DetectedField } from '@/lib/ocr';
-import dbConnect from '@/lib/database';
-import { User } from '@/models/user';
+import { createFormFields, rehydrateFormFields, classifyFormFields, buildPersistencePatch } from '@/lib/formFields';
+import { locateFillPointWithOpenRouter } from '@/lib/openrouter';
+import type { FormFieldMapping } from '@/lib/formTypes';
 import { generateFilledForm } from '@/lib/imageGenerator';
+import { requireAuthenticatedUser } from '@/lib/authSession';
+import { devLogger } from '@/lib/devLogger';
+
+export const runtime = 'nodejs';
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const MIN_IMAGE_DIMENSION = 200;
@@ -14,9 +17,11 @@ const MAX_IMAGE_DIMENSION = 8000;
 const ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
 interface Timings {
-  openrouter_ms: number;
+  extraction_ms: number;
   mapping_ms: number;
-  fill_ms: number;
+  persistence_ms: number;
+  fill_point_ms: number;
+  render_ms: number;
   total_ms: number;
 }
 
@@ -46,61 +51,36 @@ function parseStringMap(value: FormDataEntryValue | null, fieldName: string): Re
 
   const map: Record<string, string> = {};
   for (const [key, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof rawValue === 'string') {
-      map[key] = rawValue;
+    if (typeof rawValue === 'string' && rawValue.trim()) {
+      map[key] = rawValue.trim();
     }
   }
   return map;
 }
 
-function parseDetectedFields(value: FormDataEntryValue | null): DetectedField[] {
+function parseFormFields(value: FormDataEntryValue | null): FormFieldMapping[] {
   if (!value) return [];
   if (typeof value !== 'string') {
-    throw new Error('extractedFields must be a JSON array string');
+    throw new Error('formFields must be a JSON array string');
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error('extractedFields is not valid JSON');
+    throw new Error('formFields is not valid JSON');
   }
 
   if (!Array.isArray(parsed)) {
-    throw new Error('extractedFields must be an array');
+    throw new Error('formFields must be an array');
   }
 
-  return parsed
-    .map((item): DetectedField | null => {
-      if (!item || typeof item !== 'object') return null;
-      const record = item as Record<string, unknown>;
-
-      const label = typeof record.label === 'string' ? record.label.trim() : '';
-      const canonicalKey = typeof record.canonicalKey === 'string' ? record.canonicalKey.trim() : '';
-      const x = Number(record.x);
-      const y = Number(record.y);
-      const width = Number(record.width);
-      const height = Number(record.height);
-      const confidence = Number(record.confidence);
-
-      if (!label || !canonicalKey || !Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
-        return null;
-      }
-
-      return {
-        label,
-        canonicalKey,
-        x,
-        y,
-        width,
-        height,
-        confidence: Number.isFinite(confidence) ? confidence : 0.75,
-      };
-    })
-    .filter((field): field is DetectedField => field !== null);
+  return rehydrateFormFields(
+    parsed.filter((item): item is FormFieldMapping => Boolean(item && typeof item === 'object')) as FormFieldMapping[],
+  );
 }
 
-async function validateImageSafety(image: File, imageBuffer: Buffer): Promise<void> {
+async function validateImageSafety(image: File, imageBuffer: Buffer) {
   if (!ALLOWED_MIME_TYPES.has(image.type)) {
     throw new Error('Unsupported file type. Allowed: PNG, JPEG, WEBP, GIF');
   }
@@ -120,6 +100,22 @@ async function validateImageSafety(image: File, imageBuffer: Buffer): Promise<vo
   if (width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION) {
     throw new Error(`Image dimensions are too large. Maximum ${MAX_IMAGE_DIMENSION}x${MAX_IMAGE_DIMENSION}`);
   }
+
+  return metadata;
+}
+
+function clampFieldPoint(field: FormFieldMapping, imageWidth: number, imageHeight: number): FormFieldMapping {
+  if (!field.fillPoint) {
+    return field;
+  }
+
+  return {
+    ...field,
+    fillPoint: {
+      x: Math.max(0, Math.min(imageWidth - 1, Math.round(field.fillPoint.x))),
+      y: Math.max(0, Math.min(imageHeight - 1, Math.round(field.fillPoint.y))),
+    },
+  };
 }
 
 function failedResponse(requestId: string, timings: Timings, message: string, status = 500) {
@@ -128,8 +124,8 @@ function failedResponse(requestId: string, timings: Timings, message: string, st
       status: 'failed',
       requestId,
       error: message,
-      extractedFields: [],
-      autoFilledFields: [],
+      formFields: [],
+      resolvedFields: [],
       missingFields: [],
       filledImage: null,
       timings,
@@ -142,80 +138,139 @@ export async function POST(req: Request) {
   const requestId = randomUUID();
   const startTotal = Date.now();
   const timings: Timings = {
-    openrouter_ms: 0,
+    extraction_ms: 0,
     mapping_ms: 0,
-    fill_ms: 0,
+    persistence_ms: 0,
+    fill_point_ms: 0,
+    render_ms: 0,
     total_ms: 0,
   };
 
   try {
     const formData = await req.formData();
     const image = formData.get('image') as File | null;
+    const { user, response } = await requireAuthenticatedUser(req);
 
     if (!image) {
       timings.total_ms = Date.now() - startTotal;
       return failedResponse(requestId, timings, 'No image provided', 400);
     }
 
-    const buffer = Buffer.from(await image.arrayBuffer());
-    await validateImageSafety(image, buffer);
-
-    let extractedFields = parseDetectedFields(formData.get('extractedFields'));
-    const openRouterStart = Date.now();
-    if (extractedFields.length === 0) {
-      extractedFields = await extractFieldsFromImage(buffer, image.type);
+    if (!user) {
+      timings.total_ms = Date.now() - startTotal;
+      return response;
     }
-    timings.openrouter_ms = Date.now() - openRouterStart;
 
-    const mappingStart = Date.now();
+    const buffer = Buffer.from(await image.arrayBuffer());
+    const metadata = await validateImageSafety(image, buffer);
+    const imageWidth = metadata.width ?? MAX_IMAGE_DIMENSION;
+    const imageHeight = metadata.height ?? MAX_IMAGE_DIMENSION;
+
+    devLogger.log('process', 'Incoming process request', {
+      requestId,
+      hasImage: Boolean(image),
+      imageName: image.name,
+      imageType: image.type,
+      imageSize: image.size,
+      hasFormFields: formData.has('formFields'),
+      hasMissingValues: formData.has('missingValues'),
+      authenticatedUserId: user._id?.toString?.() ?? null,
+      authenticatedEmail: user.email ?? null,
+    });
+
+    let formFields = parseFormFields(formData.get('formFields'));
+
+    if (formFields.length === 0) {
+      const extractionStart = Date.now();
+      const detectedFields = await extractFieldsFromImage(buffer, image.type);
+      timings.extraction_ms = Date.now() - extractionStart;
+      formFields = createFormFields(detectedFields);
+    }
+
     const userProvidedValues = {
       ...parseStringMap(formData.get('missingValues'), 'missingValues'),
       ...parseStringMap(formData.get('userValues'), 'userValues'),
     };
 
-    await dbConnect();
-    const dbUser = await User.findOne();
-    const dbData = dbUser && dbUser.data ? Object.fromEntries(dbUser.data) : {};
+    const dbData = user.data ? Object.fromEntries(user.data) : {};
 
-    const { autoFilledFields, missingFields } = matchFields(extractedFields, dbData, userProvidedValues);
+    const mappingStart = Date.now();
+    const classified = classifyFormFields(formFields, dbData, userProvidedValues);
     timings.mapping_ms = Date.now() - mappingStart;
 
-    if (missingFields.length > 0) {
+    const persistencePatch = buildPersistencePatch(classified.formFields);
+    if (Object.keys(persistencePatch).length > 0) {
+      const persistenceStart = Date.now();
+      user.data = new Map<string, string>([
+        ...Object.entries(dbData),
+        ...Object.entries(persistencePatch),
+        ['name', user.name],
+        ['email', user.email],
+      ]);
+      await user.save();
+      timings.persistence_ms = Date.now() - persistenceStart;
+    }
+
+    devLogger.log('process', 'Mapping complete', {
+      requestId,
+      formFieldCount: classified.formFields.length,
+      resolvedCount: classified.resolvedFields.length,
+      missingCount: classified.missingFields.length,
+      persistedKeys: Object.keys(persistencePatch),
+    });
+
+    if (classified.missingFields.length > 0) {
       timings.total_ms = Date.now() - startTotal;
       return NextResponse.json({
         status: 'needs_input',
         requestId,
         error: null,
-        extractedFields,
-        autoFilledFields,
-        missingFields,
+        formFields: classified.formFields,
+        resolvedFields: classified.resolvedFields,
+        missingFields: classified.missingFields,
         filledImage: null,
         timings,
       });
     }
 
-    const fillStart = Date.now();
-    const finalImageBuffer = await generateFilledForm(
-      buffer,
-      autoFilledFields.map((field) => ({
-        label: field.label,
-        canonicalKey: field.canonicalKey,
-        value: field.value,
-        x: field.x,
-        y: field.y,
-        width: field.width,
-        height: field.height,
-      })),
-    );
-    timings.fill_ms = Date.now() - fillStart;
+    const fillPointStart = Date.now();
+    const formFieldsWithPoints: FormFieldMapping[] = [];
+    for (const field of classified.formFields) {
+      if (field.matchStatus !== 'matched' || !field.value) {
+        formFieldsWithPoints.push(field);
+        continue;
+      }
+
+      const placement = await locateFillPointWithOpenRouter(buffer, image.type, field);
+      formFieldsWithPoints.push(
+        clampFieldPoint(
+          {
+            ...field,
+            fillPoint: placement.fillPoint,
+            fillPointSource: placement.source,
+          },
+          imageWidth,
+          imageHeight,
+        ),
+      );
+    }
+    timings.fill_point_ms = Date.now() - fillPointStart;
+
+    const renderStart = Date.now();
+    const finalImageBuffer = await generateFilledForm(buffer, formFieldsWithPoints);
+    timings.render_ms = Date.now() - renderStart;
     timings.total_ms = Date.now() - startTotal;
+
+    const resolvedFields = formFieldsWithPoints.filter(
+      (field) => field.matchStatus === 'matched' && Boolean(field.value),
+    );
 
     return NextResponse.json({
       status: 'completed',
       requestId,
       error: null,
-      extractedFields,
-      autoFilledFields,
+      formFields: formFieldsWithPoints,
+      resolvedFields,
       missingFields: [],
       filledImage: `data:image/png;base64,${finalImageBuffer.toString('base64')}`,
       timings,
@@ -223,7 +278,11 @@ export async function POST(req: Request) {
   } catch (error) {
     timings.total_ms = Date.now() - startTotal;
     const message = toErrorMessage(error);
-    console.error('Processing Error:', message);
+    devLogger.error('process', 'Process request failed', {
+      requestId,
+      totalMs: timings.total_ms,
+      message,
+    });
     return failedResponse(requestId, timings, message, 500);
   }
 }

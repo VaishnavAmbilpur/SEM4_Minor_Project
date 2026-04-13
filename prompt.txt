@@ -1,0 +1,22 @@
+Let me clarify the complete application flow here. 
+According to this, edit the specific document for flow.
+
+1. user signs up in the app and a user is created in the MongoDB database if not already present, or they sign in.
+
+2. There should be two pages:
+    a. The home page where the user actually uploads a form.
+    b. The account section where all the details stored in the database should be shown to the user according to the key-value pairs.
+
+3. When user uploads a form. 
+    a. Image goes to an AI model.
+    b. All the form fields are recognised in the form and the coordinates of the text of the form field are returned, not the coordinates of the white space.
+    c. Create a store or sort of an object for the current mapping of fields of the form. And all the fields should be given a unique ID with the coordinates returned from the AI model, and the field name which is being recognised. Field names which can be optional, like the middle name of a person, should also be identified.
+    d. Those fields are matched with the already existing keys in database of the user in such a way that there should not be any ambiguity, since there can be multiple names for a single type of field, like DoB, which can be stored in the database. The form is asking for the date of birth, so both should be mapped as the same thing, and And so the value of the DOB, which is in the user database, is mapped with the date of birth in the object which is being created.
+    e. After matching all the values, only those fields which are not matched in the database should be asked from the user with an extra field modal on the screen. Also with the optional values as well as the values which are required.
+    f. Then those values should fill the form object. At the same time, they should be written in the database with the form field as the key and the value as the answer given by the user.
+
+4. Once the complete object of the form has been completed, then one by one every unique field should be given to an AI model with the coordinates of those fields and It should ask the AI model what is the correct x, y coordinate of the white space where those fields should be filled. one by one to prevent halucination
+
+5. Then the object of the field should be updated with the coordinates of the white space coordinates as received by the AI. Using that object and the sharp library, the fields should be filled in the actual image of the form.
+
+6. Then the filled form should be given to the user for download in the home page itself.
