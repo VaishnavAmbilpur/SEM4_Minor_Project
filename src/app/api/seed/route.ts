@@ -11,7 +11,11 @@ export async function POST(req: Request) {
     user.name = user.name || 'John Doe';
     user.data = new Map<string, string>([
       ['name', user.name],
+      ['first_name', 'John'],
+      ['middle_name', 'Arthur'],
+      ['last_name', 'Doe'],
       ['dob', '12-03-2002'],
+      ['date_of_birth', '12-03-2002'],
       ['address', '221B Baker Street'],
       ['email', user.email],
       ['phone', '9876543210'],

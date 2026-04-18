@@ -70,7 +70,7 @@ export default function UploadDropzone({ onUpload }: Props) {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/png, image/jpeg"
+        accept="image/png, image/jpeg, image/webp, image/gif"
         onChange={handleChange}
         className="hidden"
       />
@@ -95,6 +95,7 @@ export default function UploadDropzone({ onUpload }: Props) {
           <div className="pt-2 flex items-center justify-center gap-2">
             <span className="px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-xs font-medium text-neutral-500">JPG</span>
             <span className="px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-xs font-medium text-neutral-500">PNG</span>
+            <span className="px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-xs font-medium text-neutral-500">WEBP</span>
             <span className="px-2.5 py-1 rounded-md bg-transparent text-xs text-neutral-600 border-l border-white/10 pl-3">Max 10MB</span>
           </div>
         </div>

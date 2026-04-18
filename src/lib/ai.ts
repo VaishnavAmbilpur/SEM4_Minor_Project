@@ -1,33 +1,15 @@
+import { GoogleGenAI } from '@google/genai';
 import { devLogger } from '@/lib/devLogger';
 import type { DetectedFormField, FillPoint, FormFieldMapping } from '@/lib/formTypes';
 import { isOptionalFieldLabel, resolveCanonicalProfileKey } from '@/lib/profileKeys';
 
-const DEFAULT_OPENROUTER_MODELS = [
-  'google/gemma-4-31b-it:free',
-  'google/gemma-4-26b-a4b-it:free',
-  'google/gemma-3-27b-it:free',
-  'google/gemma-3-12b-it:free',
-  'google/gemma-3-4b-it:free',
+const DEFAULT_GEMINI_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  
 ];
 
-const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 2;
-
-interface OpenRouterChatResponse {
-  choices?: Array<{
-    message?: {
-      content?: string | Array<{ type?: string; text?: string }>;
-    };
-  }>;
-}
-
-function getRequiredEnv(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
 
 function getOptionalEnv(name: string): string | null {
   const value = process.env[name]?.trim();
@@ -42,7 +24,7 @@ function getNumberEnv(name: string, fallback: number): number {
 }
 
 function getModels(): string[] {
-  const configuredModels = process.env.OPENROUTER_MODELS?.trim();
+  const configuredModels = process.env.GEMINI_MODELS?.trim() || process.env.AI_MODELS?.trim() || process.env.OPENROUTER_MODELS?.trim();
   if (configuredModels) {
     const models = configuredModels
       .split(',')
@@ -54,33 +36,16 @@ function getModels(): string[] {
     }
   }
 
-  const configuredModel = process.env.OPENROUTER_MODEL?.trim();
+  const configuredModel = process.env.GEMINI_MODEL?.trim() || process.env.AI_MODEL?.trim() || process.env.OPENROUTER_MODEL?.trim();
   if (configuredModel) {
     return [configuredModel];
   }
 
-  return DEFAULT_OPENROUTER_MODELS;
+  return DEFAULT_GEMINI_MODELS;
 }
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function extractAssistantText(payload: OpenRouterChatResponse): string {
-  const content = payload.choices?.[0]?.message?.content;
-  if (typeof content === 'string') {
-    return content;
-  }
-
-  if (Array.isArray(content)) {
-    return content
-      .filter((part) => part?.type === 'text' && typeof part.text === 'string')
-      .map((part) => part.text)
-      .join('\n')
-      .trim();
-  }
-
-  return '';
 }
 
 function parseJsonLenient(raw: string): unknown {
@@ -246,25 +211,24 @@ function buildFillPointPrompt(field: FormFieldMapping): string {
   ].join('\n');
 }
 
-async function sendOpenRouterRequest(
+async function sendGeminiRequest(
   prompt: string,
   imageBuffer: Buffer,
   mimeType: string,
   options?: { allowMissingApiKey?: boolean },
 ): Promise<unknown> {
-  const apiKey = getOptionalEnv('OPENROUTER_API_KEY');
+  const apiKey = getOptionalEnv('GEMINI_API_KEY');
   if (!apiKey) {
     if (options?.allowMissingApiKey) {
-      throw new Error('OPENROUTER_API_KEY is not configured');
+      throw new Error('GEMINI_API_KEY is not configured');
     }
-
-    throw new Error('Missing required environment variable: OPENROUTER_API_KEY');
+    throw new Error('Missing required environment variable: GEMINI_API_KEY');
   }
 
+  const ai = new GoogleGenAI({ apiKey });
+
   const models = getModels();
-  const timeoutMs = getNumberEnv('OPENROUTER_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
-  const retries = getNumberEnv('OPENROUTER_RETRIES', DEFAULT_RETRIES);
-  const imageDataUrl = `data:${mimeType};base64,${imageBuffer.toString('base64')}`;
+  const retries = getNumberEnv('GEMINI_RETRIES', DEFAULT_RETRIES);
 
   let lastError: Error | null = null;
   const totalAttempts = models.length * (retries + 1);
@@ -272,88 +236,46 @@ async function sendOpenRouterRequest(
   for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
     const model = models[attempt % models.length];
     const cycle = Math.floor(attempt / models.length) + 1;
-    const payload = {
-      model,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: prompt,
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: imageDataUrl,
-              },
-            },
-          ],
-        },
-      ],
-    };
-
-    const controller = new AbortController();
-    const timeoutHandle = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          ...(process.env.OPENROUTER_SITE_URL
-            ? { 'HTTP-Referer': process.env.OPENROUTER_SITE_URL }
-            : {}),
-          ...(process.env.OPENROUTER_APP_NAME
-            ? { 'X-OpenRouter-Title': process.env.OPENROUTER_APP_NAME }
-            : {}),
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const bodyText = await response.text();
-        const retryable = response.status === 408 || response.status === 429 || response.status >= 500;
-
-        devLogger.warn('openrouter', 'Received non-OK response', {
-          attempt: attempt + 1,
-          cycle,
-          model,
-          status: response.status,
-          retryable,
-          bodyPreview: bodyText.slice(0, 500),
-        });
-
-        if (retryable && attempt < totalAttempts - 1) {
-          await sleep((attempt + 1) * 500);
-          continue;
+      const response = await ai.models.generateContent({
+        model,
+        contents: [
+          prompt,
+          {
+            inlineData: {
+              data: imageBuffer.toString('base64'),
+              mimeType,
+            },
+          },
+        ],
+        config: {
+          temperature: 0.2,
         }
-
-        throw new Error(`OpenRouter request failed (${response.status}): ${bodyText}`);
+      });
+      
+      const text = response.text;
+      if (!text) {
+        throw new Error('Model returned empty response');
       }
 
-      const result = (await response.json()) as OpenRouterChatResponse;
-      return parseJsonLenient(extractAssistantText(result));
+      return parseJsonLenient(text);
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error('Unknown OpenRouter error');
-      devLogger.error('openrouter', 'OpenRouter request failed', {
+      lastError = error instanceof Error ? error : new Error('Unknown Gemini AI error');
+      devLogger.error('gemini', 'Gemini AI request failed', {
         attempt: attempt + 1,
         cycle,
         model,
         message: lastError.message,
       });
       if (attempt < totalAttempts - 1) {
-        await sleep((attempt + 1) * 500);
+        await sleep((attempt + 1) * 1000);
         continue;
       }
-    } finally {
-      clearTimeout(timeoutHandle);
     }
   }
 
-  throw lastError ?? new Error('OpenRouter request failed');
+  throw lastError ?? new Error('Gemini AI request failed');
 }
 
 function heuristicFillPoint(field: FormFieldMapping): FillPoint {
@@ -363,42 +285,42 @@ function heuristicFillPoint(field: FormFieldMapping): FillPoint {
   };
 }
 
-export async function extractFieldsWithOpenRouter(
+export async function extractFieldsWithAI(
   imageBuffer: Buffer,
   mimeType: string,
 ): Promise<DetectedFormField[]> {
-  devLogger.log('openrouter', 'Starting extraction request', {
+  devLogger.log('gemini', 'Starting extraction request', {
     mimeType,
     imageBytes: imageBuffer.length,
   });
 
-  const parsed = await sendOpenRouterRequest(buildExtractionPrompt(), imageBuffer, mimeType);
+  const parsed = await sendGeminiRequest(buildExtractionPrompt(), imageBuffer, mimeType);
   const fields = normalizeExtractedFields(parsed);
 
-  devLogger.log('openrouter', 'Parsed extraction response', {
+  devLogger.log('gemini', 'Parsed extraction response', {
     fieldCount: fields.length,
     sampleFields: fields.slice(0, 5),
   });
 
   if (fields.length === 0) {
-    throw new Error('OpenRouter returned no valid fields');
+    throw new Error('Gemini returned no valid fields');
   }
 
   return fields;
 }
 
-export async function locateFillPointWithOpenRouter(
+export async function locateFillPointWithAI(
   imageBuffer: Buffer,
   mimeType: string,
   field: FormFieldMapping,
 ): Promise<{ fillPoint: FillPoint; source: 'ai' | 'heuristic' }> {
   try {
-    const parsed = await sendOpenRouterRequest(buildFillPointPrompt(field), imageBuffer, mimeType, {
+    const parsed = await sendGeminiRequest(buildFillPointPrompt(field), imageBuffer, mimeType, {
       allowMissingApiKey: true,
     });
     const fillPoint = normalizeFillPoint(parsed);
     if (!fillPoint) {
-      throw new Error('OpenRouter returned no fill point');
+      throw new Error('Gemini returned no fill point');
     }
 
     return {
@@ -406,7 +328,7 @@ export async function locateFillPointWithOpenRouter(
       source: 'ai',
     };
   } catch (error) {
-    devLogger.warn('openrouter', 'Falling back to heuristic fill point', {
+    devLogger.warn('gemini', 'Falling back to heuristic fill point', {
       fieldId: field.fieldId,
       label: field.detectedLabel,
       message: error instanceof Error ? error.message : 'Unknown error',

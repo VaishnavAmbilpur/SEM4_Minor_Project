@@ -5,7 +5,7 @@ Priority ordering: P0 (critical) -> P3 (nice to have)
 ## Current State Summary
 
 - Authentication exists and MongoDB user creation already happens on registration.
-- `/api/process` already validates uploads, extracts fields with OpenRouter, matches against profile data, and returns a completed image or a missing-fields modal.
+- `/api/process` already validates uploads, extracts fields with Gemini, matches against profile data, and returns a completed image or a missing-fields modal.
 - The current UI is still a single page, not the required two-page flow.
 - The current extraction response does not create a durable field object with IDs, optional flags, or second-pass fill coordinates.
 - User-supplied missing values are not written back to MongoDB during form completion.
@@ -33,7 +33,7 @@ Priority ordering: P0 (critical) -> P3 (nice to have)
 
 ## P0 - First AI Pass: Field Recognition
 
-- [ ] Update `src/lib/openrouter.ts` prompt and schema so the first AI pass returns the coordinates of the field text/label region, not the whitespace where text will be filled.
+- [ ] Update `src/lib/ai.ts` prompt and schema so the first AI pass returns the coordinates of the field text/label region, not the whitespace where text will be filled.
 - [ ] Ensure the extraction response explicitly identifies optional fields such as middle name.
 - [ ] Tighten schema validation so malformed or partial field objects are rejected early.
 - [ ] Update `src/app/api/process/route.ts` to store first-pass results in the new `formFields` structure instead of only `extractedFields`.

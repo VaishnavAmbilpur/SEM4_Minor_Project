@@ -3,8 +3,11 @@ import { X, Check } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface MissingFieldItem {
+  fieldId: string;
   label: string;
   canonicalKey: string;
+  isOptional: boolean;
+  matchStatus?: 'missing' | 'needs_review';
 }
 
 interface Props {
@@ -15,6 +18,16 @@ interface Props {
 
 export default function MissingFieldsModal({ missingFields, onSubmit, onCancel }: Props) {
   const [formData, setFormData] = useState<Record<string, string>>({});
+
+  const uniqueFields = Array.from(
+    missingFields.reduce<Map<string, MissingFieldItem>>((accumulator, field) => {
+      const existing = accumulator.get(field.canonicalKey);
+      if (!existing || (existing.isOptional && !field.isOptional)) {
+        accumulator.set(field.canonicalKey, field);
+      }
+      return accumulator;
+    }, new Map()),
+  ).map(([, field]) => field);
 
   const handleChange = (key: string, value: string) => {
     setFormData((prev) => ({ ...prev, [key]: value }));
@@ -55,7 +68,7 @@ export default function MissingFieldsModal({ missingFields, onSubmit, onCancel }
           
           <form onSubmit={handleSubmit} className="p-8 space-y-6 max-h-[70vh] overflow-y-auto custom-scrollbar">
             <div className="space-y-5">
-              {missingFields.map((field, index) => (
+              {uniqueFields.map((field, index) => (
                 <motion.div 
                   initial={{ opacity: 0, x: -10 }} 
                   animate={{ opacity: 1, x: 0 }} 
@@ -63,11 +76,22 @@ export default function MissingFieldsModal({ missingFields, onSubmit, onCancel }
                   key={`${field.canonicalKey}-${index}`} 
                   className="space-y-1.5"
                 >
-                  <label className="text-sm font-medium text-neutral-300 ml-1">{field.label}</label>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="text-sm font-medium text-neutral-300 ml-1">{field.label}</label>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] ${
+                        field.isOptional
+                          ? 'bg-white/5 text-neutral-400 border border-white/10'
+                          : 'bg-red-500/10 text-red-200 border border-red-500/20'
+                      }`}
+                    >
+                      {field.isOptional ? 'Optional' : 'Required'}
+                    </span>
+                  </div>
                   <div className="relative group">
                     <input
                       type="text"
-                      required
+                      required={!field.isOptional}
                       value={formData[field.canonicalKey] || ''}
                       onChange={(e) => handleChange(field.canonicalKey, e.target.value)}
                       className="w-full px-4 py-3 bg-black/40 border border-white/10 rounded-xl text-white focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all placeholder:text-neutral-600"

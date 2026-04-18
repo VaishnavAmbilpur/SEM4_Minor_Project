@@ -1,14 +1,5 @@
 import sharp from 'sharp';
-
-export interface FieldValue {
-  label: string;
-  canonicalKey?: string;
-  value: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+import type { FormFieldMapping } from './formTypes';
 
 function escapeXml(value: string): string {
   return value
@@ -65,7 +56,7 @@ function wrapText(value: string, maxCharsPerLine: number, maxLines: number): str
   return lines;
 }
 
-export async function generateFilledForm(imageBuffer: Buffer, fields: FieldValue[]): Promise<Buffer> {
+export async function generateFilledForm(imageBuffer: Buffer, fields: FormFieldMapping[]): Promise<Buffer> {
   const { width = 800, height = 1000 } = await sharp(imageBuffer).metadata();
 
   let clipPaths = '';
@@ -74,11 +65,14 @@ export async function generateFilledForm(imageBuffer: Buffer, fields: FieldValue
   for (let index = 0; index < fields.length; index += 1) {
     const field = fields[index];
     const value = (field.value || '').toString().trim();
-    if (!value) continue;
+    const fillPoint = field.fillPoint;
+    if (!value || !fillPoint) continue;
 
     const padding = 4;
-    const safeWidth = Math.max(24, Math.floor(field.width - padding * 2));
-    const safeHeight = Math.max(16, Math.floor(field.height - padding * 2));
+    const inferredWidth = Math.max(120, width - Math.round(fillPoint.x) - 32);
+    const inferredHeight = Math.max(28, Math.floor(field.labelBox.height * 1.6));
+    const safeWidth = Math.max(24, Math.floor(inferredWidth - padding * 2));
+    const safeHeight = Math.max(16, Math.floor(inferredHeight - padding * 2));
     const fontSize = Math.max(12, Math.min(24, Math.floor(safeHeight * 0.5)));
     const lineHeight = Math.max(14, Math.floor(fontSize * 1.2));
 
@@ -88,10 +82,14 @@ export async function generateFilledForm(imageBuffer: Buffer, fields: FieldValue
     const lines = wrapText(value, maxCharsPerLine, maxLines);
 
     const clipId = `field_clip_${index}`;
-    const textX = Math.round(field.x + padding);
-    const textY = Math.round(field.y + padding + fontSize * 0.85);
+    const clipX = Math.max(0, Math.round(fillPoint.x));
+    const clipY = Math.max(0, Math.round(fillPoint.y));
+    const clipWidth = Math.max(60, Math.min(width - clipX, inferredWidth));
+    const clipHeight = Math.max(22, Math.min(height - clipY, inferredHeight));
+    const textX = Math.round(clipX + padding);
+    const textY = Math.round(clipY + padding + fontSize * 0.85);
 
-    clipPaths += `<clipPath id="${clipId}"><rect x="${field.x}" y="${field.y}" width="${field.width}" height="${field.height}" /></clipPath>`;
+    clipPaths += `<clipPath id="${clipId}"><rect x="${clipX}" y="${clipY}" width="${clipWidth}" height="${clipHeight}" /></clipPath>`;
 
     const escapedLines = lines.map((line) => escapeXml(line));
     const tspan = escapedLines

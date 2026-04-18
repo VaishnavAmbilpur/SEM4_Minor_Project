@@ -3,7 +3,7 @@ import sharp from 'sharp';
 import { randomUUID } from 'crypto';
 import { extractFieldsFromImage } from '@/lib/ocr';
 import { createFormFields, rehydrateFormFields, classifyFormFields, buildPersistencePatch } from '@/lib/formFields';
-import { locateFillPointWithOpenRouter } from '@/lib/openrouter';
+import { locateFillPointWithAI } from '@/lib/ai';
 import type { FormFieldMapping } from '@/lib/formTypes';
 import { generateFilledForm } from '@/lib/imageGenerator';
 import { requireAuthenticatedUser } from '@/lib/authSession';
@@ -241,7 +241,7 @@ export async function POST(req: Request) {
         continue;
       }
 
-      const placement = await locateFillPointWithOpenRouter(buffer, image.type, field);
+      const placement = await locateFillPointWithAI(buffer, image.type, field);
       formFieldsWithPoints.push(
         clampFieldPoint(
           {
