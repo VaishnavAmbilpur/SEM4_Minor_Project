@@ -6,7 +6,6 @@ import { isOptionalFieldLabel, resolveCanonicalProfileKey } from '@/lib/profileK
 const DEFAULT_GEMINI_MODELS = [
   'gemini-2.5-flash',
   'gemini-2.5-pro',
-  
 ];
 
 const DEFAULT_RETRIES = 2;
@@ -66,7 +65,7 @@ function parseJsonLenient(raw: string): unknown {
     try {
       return JSON.parse(candidate);
     } catch {
-      // Try next fenced block.
+      
     }
   }
 
