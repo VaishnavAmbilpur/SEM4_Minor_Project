@@ -1,6 +1,10 @@
 import sharp from 'sharp';
 import { existsSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const publicDir = join(__dirname, 'public');
 if (!existsSync(publicDir)){
@@ -12,20 +16,13 @@ const svgText = `
   <rect width="100%" height="100%" fill="white"/>
   <text x="50" y="80" font-family="Arial" font-size="30" font-weight="bold" fill="black">Registration Form</text>
   
-  <text x="50" y="160" font-family="Arial" font-size="20" fill="black">Name:</text>
-  <line x1="120" y1="165" x2="500" y2="165" stroke="black" stroke-width="1"/>
+  <text x="50" y="200" font-family="Arial" font-size="20" fill="black">Name:</text>
   
-  <text x="50" y="240" font-family="Arial" font-size="20" fill="black">Date of Birth:</text>
-  <line x1="190" y1="245" x2="500" y2="245" stroke="black" stroke-width="1"/>
+  <text x="50" y="350" font-family="Arial" font-size="20" fill="black">Date of Birth:</text>
   
-  <text x="50" y="320" font-family="Arial" font-size="20" fill="black">Phone Number:</text>
-  <line x1="200" y1="325" x2="500" y2="325" stroke="black" stroke-width="1"/>
+  <text x="50" y="500" font-family="Arial" font-size="20" fill="black">Phone Number:</text>
   
-  <text x="50" y="400" font-family="Arial" font-size="20" fill="black">Address:</text>
-  <line x1="140" y1="405" x2="500" y2="405" stroke="black" stroke-width="1"/>
-
-  <text x="50" y="480" font-family="Arial" font-size="20" fill="black">Signature:</text>
-  <line x1="150" y1="485" x2="500" y2="485" stroke="black" stroke-width="1"/>
+  <text x="50" y="650" font-family="Arial" font-size="20" fill="black">Address:</text>
 </svg>
 `;
 

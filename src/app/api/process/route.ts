@@ -182,7 +182,10 @@ export async function POST(req: Request) {
 
     if (formFields.length === 0) {
       const extractionStart = Date.now();
-      const detectedFields = await extractFieldsFromImage(buffer, image.type);
+      const dbData = user.data ? Object.fromEntries(user.data) : {};
+      const existingKeys = Object.keys(dbData);
+      
+      const detectedFields = await extractFieldsFromImage(buffer, image.type, existingKeys);
       timings.extraction_ms = Date.now() - extractionStart;
       formFields = createFormFields(detectedFields);
     }
@@ -237,6 +240,12 @@ export async function POST(req: Request) {
     const formFieldsWithPoints: FormFieldMapping[] = [];
     for (const field of classified.formFields) {
       if (field.matchStatus !== 'matched' || !field.value) {
+        formFieldsWithPoints.push(field);
+        continue;
+      }
+
+      // Skip AI call if fillPoint was already determined in the first pass
+      if (field.fillPoint && field.fillPointSource === 'ai') {
         formFieldsWithPoints.push(field);
         continue;
       }

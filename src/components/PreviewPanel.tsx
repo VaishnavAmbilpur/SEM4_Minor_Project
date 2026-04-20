@@ -1,4 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion';
+import { Download } from 'lucide-react';
 
 interface Props {
   originalImage: string;
@@ -28,23 +29,44 @@ export default function PreviewPanel({ originalImage, processedImage }: Props) {
         
         <AnimatePresence mode="wait">
           {processedImage ? (
-            <motion.div 
-              key="synthesized"
-              initial={{ opacity: 0, x: 10 }} 
-              animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -10 }}
-              className="flex items-center gap-2 px-3 py-1 rounded-full bg-green-500/10 border border-green-500/20 shadow-[0_0_15px_rgba(34,197,94,0.1)]"
-            >
-              <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-              <span className="text-[10px] font-bold text-green-400 uppercase tracking-widest">Synthesized</span>
-            </motion.div>
+            <div className="flex items-center gap-3">
+              <motion.button
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => {
+                  const a = document.createElement('a');
+                  a.href = processedImage;
+                  a.download = 'filled-form.png';
+                  document.body.appendChild(a);
+                  a.click();
+                  document.body.removeChild(a);
+                }}
+                className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-500 hover:bg-indigo-400 text-white text-[10px] font-bold uppercase tracking-widest transition-colors shadow-lg shadow-indigo-500/20"
+              >
+                <Download className="w-3 h-3" />
+                Download Result
+              </motion.button>
+              
+              <motion.div 
+                key="synthesized"
+                initial={{ opacity: 0, x: 10 }} 
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -10 }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-green-500/10 border border-green-500/20 shadow-[0_0_15px_rgba(34,197,94,0.1)]"
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                <span className="text-[10px] font-bold text-green-400 uppercase tracking-widest">Synthesized</span>
+              </motion.div>
+            </div>
           ) : (
             <motion.div 
               key="original"
               initial={{ opacity: 0, x: 10 }} 
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -10 }}
-              className="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10"
             >
               <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">Original Source</span>
             </motion.div>

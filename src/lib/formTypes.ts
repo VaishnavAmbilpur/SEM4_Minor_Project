@@ -21,6 +21,7 @@ export interface DetectedFormField {
   isOptional: boolean;
   confidence: number;
   labelBox: BoundingBox;
+  fillPoint?: FillPoint;
 }
 
 export interface FormFieldMapping extends DetectedFormField {

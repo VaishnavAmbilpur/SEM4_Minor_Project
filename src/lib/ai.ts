@@ -110,11 +110,14 @@ function normalizeExtractedFields(data: unknown): DetectedFormField[] {
           : typeof record.canonicalKey === 'string'
             ? record.canonicalKey
             : rawOriginalKey;
+            
       const bbox = (record.bbox ?? {}) as Record<string, unknown>;
+      
       const x = asNumber(record.x ?? bbox.x);
       const y = asNumber(record.y ?? bbox.y);
       const width = asNumber(record.width ?? bbox.width);
       const height = asNumber(record.height ?? bbox.height);
+      
       const confidence = Math.max(0, Math.min(1, asNumber(record.confidence, 0.75)));
       const rawOptional =
         typeof record.is_optional === 'boolean'
@@ -122,6 +125,8 @@ function normalizeExtractedFields(data: unknown): DetectedFormField[] {
           : typeof record.isOptional === 'boolean'
             ? record.isOptional
             : isOptionalFieldLabel(detectedLabel);
+
+      const fillPoint = normalizeFillPoint(record);
 
       if (!detectedLabel || width <= 0 || height <= 0) {
         return null;
@@ -139,6 +144,7 @@ function normalizeExtractedFields(data: unknown): DetectedFormField[] {
           width,
           height,
         },
+        fillPoint: fillPoint ?? undefined,
       };
     })
     .filter((item): item is DetectedFormField => item !== null);
@@ -151,31 +157,38 @@ function normalizeFillPoint(data: unknown): FillPoint | null {
 
   const root = data as Record<string, unknown>;
   const point = (root.fill_point ?? root.fillPoint ?? root) as Record<string, unknown>;
-  const x = asNumber(point.x);
-  const y = asNumber(point.y);
+  const rawX = asNumber(point.x);
+  const rawY = asNumber(point.y);
 
-  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+  if (!Number.isFinite(rawX) || !Number.isFinite(rawY)) {
     return null;
   }
 
-  return { x, y };
+  return { x: rawX, y: rawY };
 }
 
-function buildExtractionPrompt(): string {
+function buildExtractionPrompt(existingDbKeys: string[] = []): string {
+  const dbKeysContext = existingDbKeys.length > 0 
+    ? `\nKNOWN DATABASE KEYS: [${existingDbKeys.join(', ')}]\nRules for canonical_key: If a detected field semantically matches one of these known database keys, you MUST use that key as the "canonical_key". Otherwise, generate a descriptive snake_case name.`
+    : '';
+
   return [
     'You are extracting fillable form fields from an image.',
     'Return strict JSON only. No markdown.',
-    'The coordinates must describe the visible field text or label region that identifies the field.',
-    'Do not return the blank whitespace where the answer will be written.',
+    'For each field, you must identify:',
+    '1. The label region (the visible text identifying the field).',
+    '2. The fill point (a safe {x, y} coordinate in the blank answer area where the text should be written).',
+    dbKeysContext,
     'Schema:',
     '{',
     '  "fields": [',
     '    {',
     '      "label": "visible field label text",',
-    '      "canonical_key": "snake_case_key",',
+    '      "canonical_key": "matched_db_key_or_snake_case",',
     '      "original_form_key": "raw field name as seen on the form",',
     '      "is_optional": false,',
     '      "bbox": { "x": 0, "y": 0, "width": 0, "height": 0 },',
+    '      "fill_point": { "x": 0, "y": 0 },',
     '      "confidence": 0.0',
     '    }',
     '  ]',
@@ -184,8 +197,9 @@ function buildExtractionPrompt(): string {
     '- Include only fields intended to be filled by a user.',
     '- Detect optional fields too, for example middle name.',
     '- Coordinates are pixel values relative to the input image.',
+    '- The "fill_point" MUST be the exact vertical center-point of label box, horizontally shifted to the right into the whitespace.',
+    '- Absolute vertical alignment with the label text is critical.',
     '- Confidence must be between 0 and 1.',
-    '- canonical_key should be semantic and stable, for example first_name, dob, phone.',
   ].join('\n');
 }
 
@@ -203,6 +217,7 @@ function buildFillPointPrompt(field: FormFieldMapping): string {
     'Schema:',
     '{ "fill_point": { "x": 0, "y": 0 } }',
     'Rules:',
+    '- Coordinates are pixel values relative to the input image.',
     '- The point must be inside the image.',
     '- The point must be in the blank answer area for this field.',
     '- Do not place the point on top of the label text.',
@@ -287,13 +302,16 @@ function heuristicFillPoint(field: FormFieldMapping): FillPoint {
 export async function extractFieldsWithAI(
   imageBuffer: Buffer,
   mimeType: string,
+  existingKeys: string[] = [],
 ): Promise<DetectedFormField[]> {
   devLogger.log('gemini', 'Starting extraction request', {
     mimeType,
     imageBytes: imageBuffer.length,
+    knownKeysCount: existingKeys.length,
   });
 
-  const parsed = await sendGeminiRequest(buildExtractionPrompt(), imageBuffer, mimeType);
+  const prompt = buildExtractionPrompt(existingKeys);
+  const parsed = await sendGeminiRequest(prompt, imageBuffer, mimeType);
   const fields = normalizeExtractedFields(parsed);
 
   devLogger.log('gemini', 'Parsed extraction response', {

@@ -82,12 +82,24 @@ export async function generateFilledForm(imageBuffer: Buffer, fields: FormFieldM
     const lines = wrapText(value, maxCharsPerLine, maxLines);
 
     const clipId = `field_clip_${index}`;
+    const clipWidth = Math.max(60, Math.min(width - Math.round(fillPoint.x), inferredWidth));
+    const clipHeight = Math.max(22, Math.min(height - Math.round(fillPoint.y), inferredHeight));
+    
+    // Label-Anchored Snapping: Use the vertical center of the label as the master anchor
+    // This forces the text to be perfectly level with its label, even if AI coordinates drift.
+    const baseAnchorY = field.labelBox.y + (field.labelBox.height / 2);
+    
+    // Cumulative Manual Shift: Counteract linear downward drift
+    // The shift starts at -25px and increases by -25px for every subsequent field.
+    const cumulativeShift = -25 - (index * 25);
+    const adjustedAnchorY = baseAnchorY + cumulativeShift;
+    
     const clipX = Math.max(0, Math.round(fillPoint.x));
-    const clipY = Math.max(0, Math.round(fillPoint.y));
-    const clipWidth = Math.max(60, Math.min(width - clipX, inferredWidth));
-    const clipHeight = Math.max(22, Math.min(height - clipY, inferredHeight));
-    const textX = Math.round(clipX + padding);
-    const textY = Math.round(clipY + padding + fontSize * 0.85);
+    const clipY = Math.max(0, Math.round(adjustedAnchorY - clipHeight / 2));
+    
+    const textX = Math.round(clipX + 4);
+    // Align baseline to the adjusted vertical center
+    const textY = Math.round(adjustedAnchorY + fontSize * 0.35);
 
     clipPaths += `<clipPath id="${clipId}"><rect x="${clipX}" y="${clipY}" width="${clipWidth}" height="${clipHeight}" /></clipPath>`;
 
