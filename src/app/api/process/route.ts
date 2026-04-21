@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import sharp from 'sharp';
 import { randomUUID } from 'crypto';
-import { extractFieldsFromImage } from '@/lib/ocr';
+import { extractFieldsWithAI } from '@/lib/ai';
 import { createFormFields, rehydrateFormFields, classifyFormFields, buildPersistencePatch } from '@/lib/formFields';
 import { locateFillPointWithAI } from '@/lib/ai';
 import type { FormFieldMapping } from '@/lib/formTypes';
@@ -185,7 +185,7 @@ export async function POST(req: Request) {
       const dbData = user.data ? Object.fromEntries(user.data) : {};
       const existingKeys = Object.keys(dbData);
       
-      const detectedFields = await extractFieldsFromImage(buffer, image.type, existingKeys);
+      const detectedFields = await extractFieldsWithAI(buffer, image.type, existingKeys);
       timings.extraction_ms = Date.now() - extractionStart;
       formFields = createFormFields(detectedFields);
     }
