@@ -54,5 +54,5 @@ pm install
   - `/api/process`: Unified backend procedure handling form validation, single-pass AI field extraction, recursive profile matching, and sharp-based rasterization with alignment calibration.
   - \/api/seed\: Optional test endpoint to populate a dummy profile via a POST request.
 - \src/components\: Reusable UI elements (\UploadDropzone\, \ProcessingLoader\, \MissingFieldsModal\, \PreviewPanel\, \AccountPageClient\).
-- \src/lib\: Core AI & process utilities (\ai.ts\, \ocr.ts\, \matcher.ts\, \auth.ts\, \imageGenerator.ts\, \database.ts\).
+- \src/lib\: Core AI & process utilities (\ai.ts\, \matcher.ts\, \auth.ts\, \imageGenerator.ts\, \database.ts\).
 - \src/models\: Mongoose schemas (\user.ts\).

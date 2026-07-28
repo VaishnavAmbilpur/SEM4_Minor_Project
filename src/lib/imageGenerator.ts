@@ -91,7 +91,7 @@ export async function generateFilledForm(imageBuffer: Buffer, fields: FormFieldM
     
     // Cumulative Manual Shift: Counteract linear downward drift
     // The shift starts at -25px and increases by -25px for every subsequent field.
-    const cumulativeShift = -25 - (index * 25);
+    const cumulativeShift = -48 - (index * 35);
     const adjustedAnchorY = baseAnchorY + cumulativeShift;
     
     const clipX = Math.max(0, Math.round(fillPoint.x));
